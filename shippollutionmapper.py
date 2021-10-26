@@ -1,1 +1,155 @@
-{"metadata":{"kernelspec":{"language":"python","display_name":"Python 3","name":"python3"},"language_info":{"pygments_lexer":"ipython3","nbconvert_exporter":"python","version":"3.6.4","file_extension":".py","codemirror_mode":{"name":"ipython","version":3},"name":"python","mimetype":"text/x-python"}},"nbformat_minor":4,"nbformat":4,"cells":[{"cell_type":"code","source":"# %% [code] {\"scrolled\":true}\nimport numpy as np # linear algebra\nimport pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)\nimport folium\nfrom folium.plugins import TimestampedGeoJson, HeatMapWithTime\n\nAISDataDF = pd.read_csv(\"../input/aisdata/aisdk_20181103.csv\")\n\nAISDataDF.drop(columns=['Type of position fixing device', 'Data source type', 'A', 'B', 'C', 'D'], inplace=True)\nAISDataDF.dropna(subset=['Latitude', 'Longitude', 'Width', 'Length', 'MMSI'], inplace=True)\nAISDataDF.dropna(how='all', subset=['ROT', 'SOG', 'COG', 'Heading'], inplace=True)\n\nAISDataDF = AISDataDF[(AISDataDF['Type of mobile'] == 'Class A')]\nAISDataDF = AISDataDF[(AISDataDF['Navigational status'] == 'Under way using engine') | (AISDataDF['Navigational status'] == 'Engaged in fishing') | (AISDataDF['Navigational status'] == 'Restricted maneuverability')]\nAISDataDF = AISDataDF[(AISDataDF['Ship type'] == 'Cargo') | (AISDataDF['Ship type'] == 'Fishing') | (AISDataDF['Ship type'] == 'Passenger') | (AISDataDF['Ship type'] == 'Tanker') | (AISDataDF['Ship type'] == 'Tug') | (AISDataDF['Ship type'] == 'Dredging') | (AISDataDF['Ship type'] == 'Military') | (AISDataDF['Ship type'] == 'Anti-pollution')]\n\nAISDataDF['# Timestamp'] = pd.to_datetime(AISDataDF['# Timestamp'], format='%d/%m/%Y %H:%M:%S')\n\n\"\"\"\nprint(AISDataDF['Ship type'].value_counts(dropna=False))\nprint(AISDataDF['Navigational status'].value_counts(dropna=False))\nprint(AISDataDF['Cargo type'].value_counts(dropna=False))\nprint(AISDataDF.head())\n\"\"\"\nprint(AISDataDF.info())\n\n\n# %% [code]\nAISDataDF['ActivityWeighting'] = AISDataDF['Navigational status'].map({'Under way using engine': 50, 'Engaged in fishing': 30, 'Restricted maneuverability': 20,})\nAISDataDF['ShipTypeWeighting'] = AISDataDF['Ship type'].map({'Tanker': 300, 'Cargo': 300, 'Military': 200, 'Fishing': 100, 'Dredging': 50, 'Passenger': 30, 'Tug': 20, 'Anti-pollution': 0})\n\n# Min-Max Normalisation\nAISDataDF['WidthNormalised'] = (AISDataDF['Width'] - AISDataDF['Width'].min()) / (AISDataDF['Width'].max() - AISDataDF['Width'].min())\nAISDataDF['LengthNormalised'] = (AISDataDF['Length'] - AISDataDF['Length'].min()) / (AISDataDF['Length'].max() - AISDataDF['Length'].min())\nAISDataDF['SOGNormalised'] = (AISDataDF['SOG'] - AISDataDF['SOG'].min()) / (AISDataDF['SOG'].max() - AISDataDF['SOG'].min())\n\nAISDataDF['emissions'] = ((AISDataDF['ActivityWeighting'] + AISDataDF['ShipTypeWeighting']) * (1 + AISDataDF['SOGNormalised'])) + ((75 * AISDataDF['WidthNormalised']) * (100 * AISDataDF['LengthNormalised']) * AISDataDF['SOGNormalised'])\nAISDataDF['emissionsNormalised'] = (AISDataDF['emissions'] - AISDataDF['emissions'].min()) / (AISDataDF['emissions'].max() - AISDataDF['emissions'].min())\n\nprint(AISDataDF['emissionsNormalised'].describe())\n\n# %% [code]\nshipEmissions = pd.DataFrame(AISDataDF.groupby('MMSI')['emissionsNormalised'].sum())\nshipEmissions.reset_index(inplace=True)\n\nlargestShipEmissions = shipEmissions.nlargest(6, 'emissionsNormalised', keep='first')\n\nsortedLargestShipEmissions = pd.merge(largestShipEmissions,AISDataDF,how='left',left_on='MMSI',right_on='MMSI',suffixes=('Total',None))\nshortLargestShipEmissions = sortedLargestShipEmissions.iloc[::5, :]\n\nm = folium.Map(location=[56.0643315, 10.7940887], zoom_start=7, tiles=\"OpenStreetMap\")\n\ndef create_geojson_features(df):\n    features = []\n    for lat,lan,time,MMSI,emissionsNormalised in zip(df['Latitude'],df['Longitude'],df['# Timestamp'],df['MMSI'],df['emissionsNormalised']): \n        time = str(time)\n        if emissionsNormalised <= 0.3:\n            feature = {\n                'type': 'Feature',\n                'geometry': {\n                    'type':'Point', \n                    'coordinates':[lan,lat]\n                },\n                'properties': {\n                    'time': time,\n                    'popup': (\"MMSI: \" + str(MMSI) + \" Emissions Multiplier: \" + str(emissionsNormalised)),\n                    'icon': 'marker',\n                    'iconstyle':{\n                        'iconSize': [20, 20],\n                        'iconUrl': 'https://img.icons8.com/pastel-glyph/2x/fa314a/cargo-ship--v2.png',\n                    }\n                }\n            }\n        elif emissionsNormalised > 0.3 and emissionsNormalised <= 0.6:\n            feature = {\n                'type': 'Feature',\n                'geometry': {\n                    'type':'Point', \n                    'coordinates':[lan,lat]\n                },\n                'properties': {\n                    'time': time,\n                    'popup': (\"MMSI: \" + str(MMSI) + \" Emissions Multiplier: \" + str(emissionsNormalised)),\n                    'icon': 'marker',\n                    'iconstyle':{\n                        'iconSize': [20, 20],\n                        'iconUrl': 'https://img.icons8.com/pastel-glyph/2x/fa314a/cargo-ship--v2.png',\n                    }\n                }\n            }\n        else:\n            feature = {\n                'type': 'Feature',\n                'geometry': {\n                    'type':'Point', \n                    'coordinates':[lan,lat]\n                },\n                'properties': {\n                    'time': time,\n                    'popup': (\"MMSI: \" + str(MMSI) + \" Emissions Multiplier: \" + str(emissionsNormalised)),\n                    'icon': 'marker',\n                    'iconstyle':{\n                        'iconSize': [20, 20],\n                        'iconUrl': 'https://img.icons8.com/pastel-glyph/2x/fa314a/cargo-ship--v2.png',\n                    }\n                }\n            }\n        try:\n            update = features.index(MMSI)\n        except ValueError:\n            features.append(feature)\n        else:\n            features[update] = feature\n            \n    return features\n\nfeatures = create_geojson_features(shortLargestShipEmissions)\n\nTimestampedGeoJson(\n        {'type': 'FeatureCollection',\n        'features': features}\n        , period='PT2M'\n        , duration='PT20S'\n        , add_last_point=False\n        , auto_play=False\n        , loop=False\n        , max_speed=10\n        , loop_button=True\n        , date_options='YYYY/MM/DD HH:mm:ss'\n        , time_slider_drag_update=True\n    ).add_to(m)\n\nm\n\n# %% [code]\nAISDataDF['hour'] = [row.hour+1 for row in AISDataDF['# Timestamp']]\n\nGroupedHourAISDataDF = pd.DataFrame(AISDataDF.groupby(['hour','MMSI'])['# Timestamp'].max())\nGroupedHourAISDataDF.reset_index(inplace=True)\n\nSortedHourAISDataDF = pd.merge(GroupedHourAISDataDF,AISDataDF,left_on=['hour','MMSI','# Timestamp'],right_on=['hour','MMSI','# Timestamp'])\n\nindex_list = [d.strftime('%d/%m/%Y %H:%M:%S') for d in pd.date_range(start=AISDataDF['# Timestamp'].min(), end=AISDataDF['# Timestamp'].max(), freq='H').round('min')]\n\nlat_long_list = []\nfor i in range(1,25):\n    temp=[]\n    for index, instance in SortedHourAISDataDF[SortedHourAISDataDF['hour'] == i].iterrows():\n        temp.append([instance['Latitude'],instance['Longitude']])\n    lat_long_list.append(temp)\n\nmp = folium.Map(location=[56.0643315, 10.7940887], zoom_start=7, tiles=\"OpenStreetMap\")\n\nHeatMapWithTime(lat_long_list, index=index_list, name='Ship Heatmap').add_to(mp)\n\nmp","metadata":{"_uuid":"ab6207ba-aa84-48b4-bfc5-ebb221526eaf","_cell_guid":"41d62427-887b-4535-b547-10934fa7f4e3","collapsed":false,"jupyter":{"outputs_hidden":false},"trusted":true},"execution_count":null,"outputs":[]}]}
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import folium
+from folium.plugins import TimestampedGeoJson, HeatMapWithTime
+
+AISDataDF = pd.read_csv("../input/aisdata/aisdk_20181103.csv")
+
+AISDataDF.drop(columns=['Type of position fixing device', 'Data source type', 'A', 'B', 'C', 'D'], inplace=True)
+AISDataDF.dropna(subset=['Latitude', 'Longitude', 'Width', 'Length', 'MMSI'], inplace=True)
+AISDataDF.dropna(how='all', subset=['ROT', 'SOG', 'COG', 'Heading'], inplace=True)
+
+AISDataDF = AISDataDF[(AISDataDF['Type of mobile'] == 'Class A')]
+AISDataDF = AISDataDF[(AISDataDF['Navigational status'] == 'Under way using engine') | (AISDataDF['Navigational status'] == 'Engaged in fishing') | (AISDataDF['Navigational status'] == 'Restricted maneuverability')]
+AISDataDF = AISDataDF[(AISDataDF['Ship type'] == 'Cargo') | (AISDataDF['Ship type'] == 'Fishing') | (AISDataDF['Ship type'] == 'Passenger') | (AISDataDF['Ship type'] == 'Tanker') | (AISDataDF['Ship type'] == 'Tug') | (AISDataDF['Ship type'] == 'Dredging') | (AISDataDF['Ship type'] == 'Military') | (AISDataDF['Ship type'] == 'Anti-pollution')]
+
+AISDataDF['# Timestamp'] = pd.to_datetime(AISDataDF['# Timestamp'], format='%d/%m/%Y %H:%M:%S')
+
+"""
+print(AISDataDF['Ship type'].value_counts(dropna=False))
+print(AISDataDF['Navigational status'].value_counts(dropna=False))
+print(AISDataDF['Cargo type'].value_counts(dropna=False))
+print(AISDataDF.head())
+"""
+print(AISDataDF.info())
+
+
+AISDataDF['ActivityWeighting'] = AISDataDF['Navigational status'].map({'Under way using engine': 50, 'Engaged in fishing': 30, 'Restricted maneuverability': 20,})
+AISDataDF['ShipTypeWeighting'] = AISDataDF['Ship type'].map({'Tanker': 300, 'Cargo': 300, 'Military': 200, 'Fishing': 100, 'Dredging': 50, 'Passenger': 30, 'Tug': 20, 'Anti-pollution': 0})
+
+# Min-Max Normalisation
+AISDataDF['WidthNormalised'] = (AISDataDF['Width'] - AISDataDF['Width'].min()) / (AISDataDF['Width'].max() - AISDataDF['Width'].min())
+AISDataDF['LengthNormalised'] = (AISDataDF['Length'] - AISDataDF['Length'].min()) / (AISDataDF['Length'].max() - AISDataDF['Length'].min())
+AISDataDF['SOGNormalised'] = (AISDataDF['SOG'] - AISDataDF['SOG'].min()) / (AISDataDF['SOG'].max() - AISDataDF['SOG'].min())
+
+AISDataDF['emissions'] = ((AISDataDF['ActivityWeighting'] + AISDataDF['ShipTypeWeighting']) * (1 + AISDataDF['SOGNormalised'])) + ((75 * AISDataDF['WidthNormalised']) * (100 * AISDataDF['LengthNormalised']) * AISDataDF['SOGNormalised'])
+AISDataDF['emissionsNormalised'] = (AISDataDF['emissions'] - AISDataDF['emissions'].min()) / (AISDataDF['emissions'].max() - AISDataDF['emissions'].min())
+
+print(AISDataDF['emissionsNormalised'].describe())
+
+
+shipEmissions = pd.DataFrame(AISDataDF.groupby('MMSI')['emissionsNormalised'].sum())
+shipEmissions.reset_index(inplace=True)
+
+largestShipEmissions = shipEmissions.nlargest(6, 'emissionsNormalised', keep='first')
+
+sortedLargestShipEmissions = pd.merge(largestShipEmissions,AISDataDF,how='left',left_on='MMSI',right_on='MMSI',suffixes=('Total',None))
+shortLargestShipEmissions = sortedLargestShipEmissions.iloc[::5, :]
+
+m = folium.Map(location=[56.0643315, 10.7940887], zoom_start=7, tiles="OpenStreetMap")
+
+def create_geojson_features(df):
+    features = []
+    for lat,lan,time,MMSI,emissionsNormalised in zip(df['Latitude'],df['Longitude'],df['# Timestamp'],df['MMSI'],df['emissionsNormalised']): 
+        time = str(time)
+        if emissionsNormalised <= 0.3:
+            feature = {
+                'type': 'Feature',
+                'geometry': {
+                    'type':'Point', 
+                    'coordinates':[lan,lat]
+                },
+                'properties': {
+                    'time': time,
+                    'popup': ("MMSI: " + str(MMSI) + " Emissions Multiplier: " + str(emissionsNormalised)),
+                    'icon': 'marker',
+                    'iconstyle':{
+                        'iconSize': [20, 20],
+                        'iconUrl': 'https://img.icons8.com/pastel-glyph/2x/fa314a/cargo-ship--v2.png',
+                    }
+                }
+            }
+        elif emissionsNormalised > 0.3 and emissionsNormalised <= 0.6:
+            feature = {
+                'type': 'Feature',
+                'geometry': {
+                    'type':'Point', 
+                    'coordinates':[lan,lat]
+                },
+                'properties': {
+                    'time': time,
+                    'popup': ("MMSI: " + str(MMSI) + " Emissions Multiplier: " + str(emissionsNormalised)),
+                    'icon': 'marker',
+                    'iconstyle':{
+                        'iconSize': [20, 20],
+                        'iconUrl': 'https://img.icons8.com/pastel-glyph/2x/fa314a/cargo-ship--v2.png',
+                    }
+                }
+            }
+        else:
+            feature = {
+                'type': 'Feature',
+                'geometry': {
+                    'type':'Point', 
+                    'coordinates':[lan,lat]
+                },
+                'properties': {
+                    'time': time,
+                    'popup': ("MMSI: " + str(MMSI) + " Emissions Multiplier: " + str(emissionsNormalised)),
+                    'icon': 'marker',
+                    'iconstyle':{
+                        'iconSize': [20, 20],
+                        'iconUrl': 'https://img.icons8.com/pastel-glyph/2x/fa314a/cargo-ship--v2.png',
+                    }
+                }
+            }
+        try:
+            update = features.index(MMSI)
+        except ValueError:
+            features.append(feature)
+        else:
+            features[update] = feature
+            
+    return features
+
+features = create_geojson_features(shortLargestShipEmissions)
+
+TimestampedGeoJson(
+        {'type': 'FeatureCollection',
+        'features': features}
+        , period='PT2M'
+        , duration='PT20S'
+        , add_last_point=False
+        , auto_play=False
+        , loop=False
+        , max_speed=10
+        , loop_button=True
+        , date_options='YYYY/MM/DD HH:mm:ss'
+        , time_slider_drag_update=True
+    ).add_to(m)
+
+m
+
+
+AISDataDF['hour'] = [row.hour+1 for row in AISDataDF['# Timestamp']]
+
+GroupedHourAISDataDF = pd.DataFrame(AISDataDF.groupby(['hour','MMSI'])['# Timestamp'].max())
+GroupedHourAISDataDF.reset_index(inplace=True)
+
+SortedHourAISDataDF = pd.merge(GroupedHourAISDataDF,AISDataDF,left_on=['hour','MMSI','# Timestamp'],right_on=['hour','MMSI','# Timestamp'])
+
+index_list = [d.strftime('%d/%m/%Y %H:%M:%S') for d in pd.date_range(start=AISDataDF['# Timestamp'].min(), end=AISDataDF['# Timestamp'].max(), freq='H').round('min')]
+
+lat_long_list = []
+for i in range(1,25):
+    temp=[]
+    for index, instance in SortedHourAISDataDF[SortedHourAISDataDF['hour'] == i].iterrows():
+        temp.append([instance['Latitude'],instance['Longitude']])
+    lat_long_list.append(temp)
+
+mp = folium.Map(location=[56.0643315, 10.7940887], zoom_start=7, tiles="OpenStreetMap")
+
+HeatMapWithTime(lat_long_list, index=index_list, name='Ship Heatmap').add_to(mp)
+
+mp
+
