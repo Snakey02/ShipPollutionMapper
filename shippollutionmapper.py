@@ -65,7 +65,7 @@ def create_geojson_features(df):
                     'icon': 'marker',
                     'iconstyle':{
                         'iconSize': [20, 20],
-                        'iconUrl': 'https://img.icons8.com/pastel-glyph/2x/fa314a/cargo-ship--v2.png',
+                        'iconUrl': 'https://img.icons8.com/pastel-glyph/2x/4afa31/cargo-ship--v2.png',
                     }
                 }
             }
@@ -82,7 +82,7 @@ def create_geojson_features(df):
                     'icon': 'marker',
                     'iconstyle':{
                         'iconSize': [20, 20],
-                        'iconUrl': 'https://img.icons8.com/pastel-glyph/2x/fa314a/cargo-ship--v2.png',
+                        'iconUrl': 'https://img.icons8.com/pastel-glyph/2x/f98742/cargo-ship--v2.png',
                     }
                 }
             }
