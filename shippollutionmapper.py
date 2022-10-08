@@ -3,48 +3,78 @@ import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 import folium
 from folium.plugins import TimestampedGeoJson, HeatMapWithTime
 
-AISDataDF = pd.read_csv("../input/aisdata/aisdk_20181103.csv")
+AISDataDF = pd.read_csv("../input/aisdata/aisdk_20181103.csv") # Point to AIS Data File
 
+"""
+AIS Data File Pre-Processing
+"""
+
+# Drop extraneous columns from data file
 AISDataDF.drop(columns=['Type of position fixing device', 'Data source type', 'A', 'B', 'C', 'D'], inplace=True)
+# Drop rows with incomplete ship/location data
 AISDataDF.dropna(subset=['Latitude', 'Longitude', 'Width', 'Length', 'MMSI'], inplace=True)
 AISDataDF.dropna(how='all', subset=['ROT', 'SOG', 'COG', 'Heading'], inplace=True)
 
+# Filter only Class A AIS System (Large Vessels)
 AISDataDF = AISDataDF[(AISDataDF['Type of mobile'] == 'Class A')]
+# Filter active vessels
 AISDataDF = AISDataDF[(AISDataDF['Navigational status'] == 'Under way using engine') | (AISDataDF['Navigational status'] == 'Engaged in fishing') | (AISDataDF['Navigational status'] == 'Restricted maneuverability')]
+# Filter large vessels
 AISDataDF = AISDataDF[(AISDataDF['Ship type'] == 'Cargo') | (AISDataDF['Ship type'] == 'Fishing') | (AISDataDF['Ship type'] == 'Passenger') | (AISDataDF['Ship type'] == 'Tanker') | (AISDataDF['Ship type'] == 'Tug') | (AISDataDF['Ship type'] == 'Dredging') | (AISDataDF['Ship type'] == 'Military') | (AISDataDF['Ship type'] == 'Anti-pollution')]
 
+# Format Timestamp column
 AISDataDF['# Timestamp'] = pd.to_datetime(AISDataDF['# Timestamp'], format='%d/%m/%Y %H:%M:%S')
 
+# Data info printing:
 """
 print(AISDataDF['Ship type'].value_counts(dropna=False))
 print(AISDataDF['Navigational status'].value_counts(dropna=False))
 print(AISDataDF['Cargo type'].value_counts(dropna=False))
 print(AISDataDF.head())
-"""
 print(AISDataDF.info())
+"""
 
 
+"""
+Calculate Predicted Pollution Weightings for Vessels
+"""
+
+# Assign predicted pollution weightings for each vessel type/activity
 AISDataDF['ActivityWeighting'] = AISDataDF['Navigational status'].map({'Under way using engine': 50, 'Engaged in fishing': 30, 'Restricted maneuverability': 20,})
 AISDataDF['ShipTypeWeighting'] = AISDataDF['Ship type'].map({'Tanker': 300, 'Cargo': 300, 'Military': 200, 'Fishing': 100, 'Dredging': 50, 'Passenger': 30, 'Tug': 20, 'Anti-pollution': 0})
 
-# Min-Max Normalisation
+# Min-Max Normalisation for vessel sizing
 AISDataDF['WidthNormalised'] = (AISDataDF['Width'] - AISDataDF['Width'].min()) / (AISDataDF['Width'].max() - AISDataDF['Width'].min())
 AISDataDF['LengthNormalised'] = (AISDataDF['Length'] - AISDataDF['Length'].min()) / (AISDataDF['Length'].max() - AISDataDF['Length'].min())
 AISDataDF['SOGNormalised'] = (AISDataDF['SOG'] - AISDataDF['SOG'].min()) / (AISDataDF['SOG'].max() - AISDataDF['SOG'].min())
 
+# Calculate a predicted weighted pollution value & normalise between 0-1
 AISDataDF['emissions'] = ((AISDataDF['ActivityWeighting'] + AISDataDF['ShipTypeWeighting']) * (1 + AISDataDF['SOGNormalised'])) + ((75 * AISDataDF['WidthNormalised']) * (100 * AISDataDF['LengthNormalised']) * AISDataDF['SOGNormalised'])
 AISDataDF['emissionsNormalised'] = (AISDataDF['emissions'] - AISDataDF['emissions'].min()) / (AISDataDF['emissions'].max() - AISDataDF['emissions'].min())
 
+# Describe normalised pollution weighting values
 print(AISDataDF['emissionsNormalised'].describe())
 
 
+"""
+Create Dataset of n Most Polluting Vessels
+"""
+
+# Groud AIS data entries, summing normalised emission value, per Ship ID
 shipEmissions = pd.DataFrame(AISDataDF.groupby('MMSI')['emissionsNormalised'].sum())
 shipEmissions.reset_index(inplace=True)
 
+# Display n=6 most polluting ships
 largestShipEmissions = shipEmissions.nlargest(6, 'emissionsNormalised', keep='first')
 
+# Get AIS data for n=6 most polluting ships 
 sortedLargestShipEmissions = pd.merge(largestShipEmissions,AISDataDF,how='left',left_on='MMSI',right_on='MMSI',suffixes=('Total',None))
 shortLargestShipEmissions = sortedLargestShipEmissions.iloc[::5, :]
+
+
+"""
+Create Folium Map of Denmark (AIS Data Location) With n Most Polluting Vessels
+"""
 
 m = folium.Map(location=[56.0643315, 10.7940887], zoom_start=7, tiles="OpenStreetMap")
 
@@ -130,6 +160,10 @@ TimestampedGeoJson(
 
 m
 
+
+"""
+Create Folium HeatMap of Vessel Pollution Around Denmark (AIS Data Location)
+"""
 
 AISDataDF['hour'] = [row.hour+1 for row in AISDataDF['# Timestamp']]
 
