@@ -1,6 +1,8 @@
 # ShipPollutionMapper
 University of Bristol CSS Hackathon 2021 Project - Ocean Pollution Mapper for Marine Traffic
 
+Kaggle Project Link:
+https://www.kaggle.com/code/jakeward/shippollutionmapper/
 
 ## Data Download & Initialisation
 (Historical AIS Data sourced from the Danish Maritime Authority)
